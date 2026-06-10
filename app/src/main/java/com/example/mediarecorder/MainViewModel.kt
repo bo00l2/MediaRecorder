@@ -1,6 +1,11 @@
 package com.example.mediarecorder
 
 import android.app.Application
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -29,7 +34,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+enum class AppScreen {
+    MAIN,
+    GENRE_SELECTION,
+    GENERATING,
+    PLAYBACK
+}
+
+class MainViewModel(application: Application) : AndroidViewModel(application), SensorEventListener {
 
     private val audioRecorder by lazy {
         AndroidAudioRecorder(application.applicationContext)
@@ -46,6 +58,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val geminiMusicService by lazy {
         GeminiMusicService.create()
     }
+
+    private val sensorManager by lazy {
+        application.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    }
+
+    // --- FR-06 & Redesign UI States ---
+    var currentScreen by mutableStateOf(AppScreen.MAIN)
+
+    var latestRecordedFile by mutableStateOf<RecordingFile?>(null)
+
+    var latestConvertedFile by mutableStateOf<ConvertedFile?>(null)
+
+    var selectedGenre by mutableStateOf("팝")
+
+    var generatingStep by mutableStateOf(1)
+        private set
 
     // --- FR-05 Player States ---
     private var exoPlayer: ExoPlayer? = null
@@ -164,47 +192,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- FR-03 Genre Methods ---
-    fun toggleGenre(genre: String) {
-        selectedGenres = if (selectedGenres.contains(genre)) {
-            selectedGenres - genre
-        } else {
-            selectedGenres + genre
-        }
+    fun selectGenre(genre: String) {
+        selectedGenre = genre
     }
 
     // --- FR-03 AI Conversion Logic ---
     fun convertHummingToMusic(recording: RecordingFile) {
-        if (selectedGenres.isEmpty()) return
+        latestRecordedFile = recording
+        generateMusic()
+    }
+
+    fun generateMusic() {
+        val recording = latestRecordedFile ?: return
 
         viewModelScope.launch {
+            currentScreen = AppScreen.GENERATING
             isConverting = true
             convertingFile = recording
             
-            val genresString = selectedGenres.joinToString(", ")
             val context = getApplication<Application>().applicationContext
             
             try {
-                // Step 1: Connecting
-                conversionProgressText = "Gemini Lyria 3 모델 연결 중..."
-                delay(1000)
+                // Step 1: Humming analysis
+                generatingStep = 1
+                conversionProgressText = "허밍 분석 중"
+                delay(1200)
 
-                // Step 2: Uploading & analyzing
-                conversionProgressText = "허밍 파일 및 상황 데이터(${locationName}, 날씨) 전송 중..."
+                // Step 2: Weather info
+                generatingStep = 2
+                conversionProgressText = "날씨 정보 반영 중"
                 delay(1200)
 
                 // Step 3: Synthesis
-                conversionProgressText = "고품질 [$genresString] 반주 합성 진행 중..."
-                delay(1500)
+                generatingStep = 3
+                conversionProgressText = "$selectedGenre 스타일 적용 중"
+                delay(1200)
+
+                // Step 4: Lyrics
+                generatingStep = 4
+                conversionProgressText = "가사 작성 중"
+                delay(1200)
 
                 // Call service
                 val file = File(recording.path)
                 val requestFile = file.asRequestBody("audio/m4a".toMediaTypeOrNull())
                 val body = MultipartBody.Part.createFormData("audio", file.name, requestFile)
-                val genrePart = genresString.toRequestBody("text/plain".toMediaTypeOrNull())
+                val genrePart = selectedGenre.toRequestBody("text/plain".toMediaTypeOrNull())
                 val weatherPart = weatherStatus.toRequestBody("text/plain".toMediaTypeOrNull())
                 val locationPart = locationName.toRequestBody("text/plain".toMediaTypeOrNull())
 
                 val response = geminiMusicService.convertMusic(body, genrePart, weatherPart, locationPart)
+                var generatedFile: ConvertedFile? = null
+
                 if (response.isSuccessful) {
                     val responseBody = response.body()
                     if (responseBody != null) {
@@ -225,21 +264,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val serverMood = response.headers()["x-music-mood"] ?: response.headers()["x-mood"]
                         val serverLyrics = response.headers()["x-music-lyrics"] ?: response.headers()["x-lyrics"]
                         
-                        val mood = decodeHeader(serverMood) ?: getMockMood(weatherStatus, genresString)
-                        val lyrics = decodeHeader(serverLyrics) ?: getMockLyrics(weatherStatus, genresString)
+                        val mood = decodeHeader(serverMood) ?: getMockMood(weatherStatus, selectedGenre)
+                        val lyrics = decodeHeader(serverLyrics) ?: getMockLyrics(weatherStatus, selectedGenre)
                         
                         val jsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
                         val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
                         jsonFile.writeText(Gson().toJson(jsonMap))
+
+                        generatedFile = ConvertedFile(
+                            name = outputFileName,
+                            path = outputFile.absolutePath,
+                            size = formatFileSize(outputFile.length()),
+                            dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(outputFile.lastModified())),
+                            mood = mood,
+                            lyrics = lyrics
+                        )
                     }
                 } else {
-                    saveMockConvertedFile(recording, genresString)
+                    generatedFile = saveMockConvertedFileAndReturn(recording, selectedGenre)
+                }
+
+                if (generatedFile != null) {
+                    latestConvertedFile = generatedFile
+                    playFile(generatedFile)
+                    currentScreen = AppScreen.PLAYBACK
+                } else {
+                    currentScreen = AppScreen.MAIN
                 }
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                // Fallback simulation engine
-                saveMockConvertedFile(recording, genresString)
+                val generatedFile = saveMockConvertedFileAndReturn(recording, selectedGenre)
+                if (generatedFile != null) {
+                    latestConvertedFile = generatedFile
+                    playFile(generatedFile)
+                    currentScreen = AppScreen.PLAYBACK
+                } else {
+                    currentScreen = AppScreen.MAIN
+                }
             } finally {
                 isConverting = false
                 convertingFile = null
@@ -249,7 +311,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun saveMockConvertedFile(recording: RecordingFile, genres: String) = withContext(Dispatchers.IO) {
+    private suspend fun saveMockConvertedFileAndReturn(recording: RecordingFile, genre: String): ConvertedFile? = withContext(Dispatchers.IO) {
         val context = getApplication<Application>().applicationContext
         val outputDir = File(context.getExternalFilesDir(null), "Converted").apply {
             if (!exists()) mkdirs()
@@ -260,7 +322,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val mockFileName = "converted_${cleanName}_$timestamp.m4a"
         val mockFile = File(outputDir, mockFileName)
 
-        // To make the file completely playable, we copy the original humming audio container bytes
         val sourceFile = File(recording.path)
         if (sourceFile.exists()) {
             try {
@@ -271,17 +332,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                return@withContext null
             }
+        } else {
+            return@withContext null
         }
 
         val mockJsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
-        val mood = getMockMood(weatherStatus, genres)
-        val lyrics = getMockLyrics(weatherStatus, genres)
+        val mood = getMockMood(weatherStatus, genre)
+        val lyrics = getMockLyrics(weatherStatus, genre)
         val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
         try {
             mockJsonFile.writeText(Gson().toJson(jsonMap))
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        return@withContext ConvertedFile(
+            name = mockFileName,
+            path = mockFile.absolutePath,
+            size = formatFileSize(mockFile.length()),
+            dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(mockFile.lastModified())),
+            mood = mood,
+            lyrics = lyrics
+        )
+    }
+
+    // --- File Deletion Logic ---
+    fun deleteConvertedFile(file: ConvertedFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val audioFile = File(file.path)
+            if (audioFile.exists()) {
+                audioFile.delete()
+            }
+            val jsonFile = File(audioFile.parent, audioFile.name.substringBeforeLast(".") + ".json")
+            if (jsonFile.exists()) {
+                jsonFile.delete()
+            }
+            
+            withContext(Dispatchers.Main) {
+                if (currentPlayingFile?.path == file.path) {
+                    stopPlayback()
+                }
+                loadConvertedRecordings()
+            }
+        }
+    }
+
+    fun deleteRecordingFile(file: RecordingFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val audioFile = File(file.path)
+            if (audioFile.exists()) {
+                audioFile.delete()
+            }
+            
+            withContext(Dispatchers.Main) {
+                if (latestRecordedFile?.path == file.path) {
+                    latestRecordedFile = null
+                }
+                loadRecordings()
+            }
         }
     }
 
@@ -342,6 +452,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 노래가 되어 너에게 전해지기를
             """.trimIndent()
         }
+    }
+
+    // --- FR-06 Accelerometer Sensor Listener ---
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastZ = 0f
+    private var lastUpdate = 0L
+    private var lastShakeTime = 0L
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event == null || event.sensor.type != Sensor.TYPE_ACCELEROMETER) return
+        
+        val currentTime = System.currentTimeMillis()
+        val timeDifference = currentTime - lastUpdate
+        if (timeDifference > 100) {
+            lastUpdate = currentTime
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+            
+            val speed = Math.abs(x + y + z - lastX - lastY - lastZ) / timeDifference * 10000
+            if (speed > 800) {
+                val now = System.currentTimeMillis()
+                if (now - lastShakeTime > 1000) {
+                    lastShakeTime = now
+                    triggerRandomGenreChange()
+                }
+            }
+            lastX = x
+            lastY = y
+            lastZ = z
+        }
+    }
+
+    fun registerSensor() {
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (sensor != null) {
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    fun unregisterSensor() {
+        sensorManager.unregisterListener(this)
+    }
+
+    fun triggerRandomGenreChange() {
+        val genres = listOf("팝", "재즈", "클래식", "록", "R&B", "힙합", "일렉트로닉", "발라드")
+        selectedGenre = genres.random()
     }
 
     // --- FR-05 ExoPlayer Controller Methods ---
@@ -508,6 +668,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopAmplitudeTracking()
         
         loadRecordings()
+
+        val lastRecording = recordingsList.firstOrNull()
+        if (lastRecording != null) {
+            latestRecordedFile = lastRecording
+            currentScreen = AppScreen.GENRE_SELECTION
+        }
     }
 
     private fun startTimer() {

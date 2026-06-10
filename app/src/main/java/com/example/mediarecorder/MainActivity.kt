@@ -30,6 +30,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,6 +61,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.registerSensor()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.unregisterSensor()
+    }
 }
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -72,14 +90,12 @@ fun MainScreen(viewModel: MainViewModel) {
     val hasMic = micPermission?.status?.isGranted == true
     val hasLocation = locationPermission?.status?.isGranted == true
 
-    // Fetch location and weather as soon as location permission is granted
     LaunchedEffect(hasLocation) {
         if (hasLocation) {
             viewModel.fetchLocationAndWeather()
         }
     }
 
-    // Dynamic background brush mapping weather status
     val backgroundBrush = when (viewModel.weatherStatus) {
         "Sunny" -> Brush.verticalGradient(
             colors = listOf(Color(0xFF13111C), Color(0xFF3A2426), Color(0xFF663B2F))
@@ -98,6 +114,14 @@ fun MainScreen(viewModel: MainViewModel) {
         )
     }
 
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(viewModel.currentScreen) {
+        if (viewModel.currentScreen == AppScreen.GENRE_SELECTION) {
+            focusRequester.requestFocus()
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -106,439 +130,993 @@ fun MainScreen(viewModel: MainViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .background(backgroundBrush)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Header Title
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Humming Recorder",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        brush = Brush.linearGradient(
-                            colors = listOf(Color(0xFFD0BCFF), Color(0xFF00E5FF))
-                        )
-                    ),
-                    modifier = Modifier.padding(bottom = 2.dp)
-                )
-                Text(
-                    text = "AI 음악 변환 & 상황 정보 수집",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                if (!hasMic) {
-                    PermissionRationaleScreen(
-                        onRequestPermission = { permissionsState.launchMultiplePermissionRequest() },
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    // Weather Glassmorphic Widget
-                    WeatherWidget(
-                        locationName = viewModel.locationName,
-                        temperature = viewModel.temperature,
-                        weatherStatus = viewModel.weatherStatus,
-                        recommendedGenre = viewModel.recommendedGenre,
-                        hasLocationPermission = hasLocation,
-                        onRequestLocationPermission = { permissionsState.launchMultiplePermissionRequest() }
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Genre Selector
-                    GenreSelector(
-                        selectedGenres = viewModel.selectedGenres,
-                        recommendedGenre = viewModel.recommendedGenre,
-                        onGenreToggle = { viewModel.toggleGenre(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Recording Panel (Visualizer + Buttons)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            if (viewModel.isRecording) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    val infiniteTransition = rememberInfiniteTransition(label = "dot")
-                                    val alpha by infiniteTransition.animateFloat(
-                                        initialValue = 1f,
-                                        targetValue = 0.2f,
-                                        animationSpec = infiniteRepeatable(
-                                            animation = tween(800, easing = LinearEasing),
-                                            repeatMode = RepeatMode.Reverse
-                                        ),
-                                        label = "dotAlpha"
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFFFF4D4D).copy(alpha = alpha))
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = viewModel.recordingDuration,
-                                        color = Color.White,
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            } else {
-                                Text(
-                                    text = "중앙 버튼을 눌러 허밍 시작",
-                                    color = Color(0xFFD0BCFF).copy(alpha = 0.8f),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            AudioVisualizer(
-                                amplitude = viewModel.amplitude,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(60.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            RecordButton(
-                                isRecording = viewModel.isRecording,
-                                amplitude = viewModel.amplitude,
-                                onClick = { viewModel.toggleRecording() }
-                            )
+                .focusRequester(focusRequester)
+                .focusable()
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown && 
+                        keyEvent.key == Key.Spacebar) {
+                        if (viewModel.currentScreen == AppScreen.GENRE_SELECTION) {
+                            viewModel.triggerRandomGenreChange()
+                            true
+                        } else {
+                            false
                         }
+                    } else {
+                        false
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Recordings & Converted List Tabs
-                    RecordingsTabContainer(
-                        recordings = viewModel.recordingsList,
-                        convertedList = viewModel.convertedList,
-                        selectedGenres = viewModel.selectedGenres,
-                        onConvertClick = { viewModel.convertHummingToMusic(it) },
-                        currentPlayingFile = viewModel.currentPlayingFile,
-                        isPlaying = viewModel.isPlaying,
-                        onItemClick = { viewModel.playFile(it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1.2f)
-                    )
                 }
-            }
-
-            // AI Conversion Loading Overlay Dialog
-            if (viewModel.isConverting) {
-                AIConversionDialog(
-                    progressText = viewModel.conversionProgressText,
-                    targetFile = viewModel.convertingFile?.name ?: ""
+        ) {
+            if (!hasMic) {
+                PermissionRationaleScreen(
+                    onRequestPermission = { permissionsState.launchMultiplePermissionRequest() },
+                    modifier = Modifier.align(Alignment.Center)
                 )
-            }
-
-            // FR-05 Floating Glassmorphic Music Player
-            val currentPlaying = viewModel.currentPlayingFile
-            if (currentPlaying != null) {
-                SmartMusicPlayer(
-                    file = currentPlaying,
-                    isPlaying = viewModel.isPlaying,
-                    position = viewModel.playbackPosition,
-                    duration = viewModel.playbackDuration,
-                    onPlayPause = {
-                        if (viewModel.isPlaying) viewModel.pausePlayback() else viewModel.resumePlayback()
-                    },
-                    onSeek = { viewModel.seekTo(it) },
-                    onClose = { viewModel.stopPlayback() },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
-                )
+            } else {
+                when (viewModel.currentScreen) {
+                    AppScreen.MAIN -> Screen1_Record(
+                        viewModel = viewModel, 
+                        hasLocation = hasLocation, 
+                        onRequestLocation = { permissionsState.launchMultiplePermissionRequest() }
+                    )
+                    AppScreen.GENRE_SELECTION -> Screen2_GenreSelection(viewModel = viewModel)
+                    AppScreen.GENERATING -> Screen3_Generating(viewModel = viewModel)
+                    AppScreen.PLAYBACK -> Screen4_Playback(viewModel = viewModel)
+                }
             }
         }
     }
 }
 
 @Composable
-fun WeatherWidget(
-    locationName: String,
-    temperature: Double?,
-    weatherStatus: String,
-    recommendedGenre: String,
-    hasLocationPermission: Boolean,
-    onRequestLocationPermission: () -> Unit
+fun Screen1_Record(
+    viewModel: MainViewModel,
+    hasLocation: Boolean,
+    onRequestLocation: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.White.copy(alpha = 0.08f)
-        ),
+    var showHistoryDialog by remember { mutableStateOf(false) }
+
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Top Header
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                if (hasLocationPermission) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.MyLocation,
-                            contentDescription = null,
-                            tint = Color(0xFF00E5FF),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = locationName,
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        val weatherIcon = when (weatherStatus) {
-                            "Sunny" -> "☀️"
-                            "Rainy" -> "🌧️"
-                            "Cloudy" -> "☁️"
-                            "Snowy" -> "❄️"
-                            else -> "❓"
-                        }
-                        val weatherName = when (weatherStatus) {
-                            "Sunny" -> "맑음"
-                            "Rainy" -> "비"
-                            "Cloudy" -> "흐림"
-                            "Snowy" -> "눈"
-                            else -> "분석 중"
-                        }
-                        Text(
-                            text = "$weatherIcon $weatherName",
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        if (temperature != null) {
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = String.format(Locale.getDefault(), "%.1f°C", temperature),
-                                color = Color(0xFF00E5FF),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "상황 맞춤 날씨 분석 대기 중",
+                        text = if (hasLocation) viewModel.locationName else "위치 권한 대기 중",
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                val weatherIcon = when (viewModel.weatherStatus) {
+                    "Sunny" -> "☀️"
+                    "Rainy" -> "🌧️"
+                    "Cloudy" -> "☁️"
+                    "Snowy" -> "❄️"
+                    else -> "❓"
+                }
+                val weatherName = when (viewModel.weatherStatus) {
+                    "Sunny" -> "맑음"
+                    "Rainy" -> "비"
+                    "Cloudy" -> "흐림"
+                    "Snowy" -> "눈"
+                    else -> "분석 중"
+                }
+                Text(
+                    text = if (hasLocation && viewModel.temperature != null) {
+                        "$weatherIcon ${String.format(Locale.getDefault(), "%.1f°C", viewModel.temperature)} $weatherName"
+                    } else {
+                        "날씨 정보 가져오는 중"
+                    },
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp
+                )
+            }
+            IconButton(
+                onClick = { showHistoryDialog = true },
+                modifier = Modifier
+                    .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                    .size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.History,
+                    contentDescription = "History",
+                    tint = Color.White
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Text(
+            text = "당신의 허밍을 음악으로",
+            style = MaterialTheme.typography.headlineMedium.copy(
+                fontWeight = FontWeight.ExtraBold,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFFD0BCFF), Color(0xFF00E5FF))
+                )
+            ),
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = if (viewModel.isRecording) "녹음 중입니다..." else "버튼을 눌러 녹음을 시작하세요",
+            color = Color.Gray,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.weight(1.5f)
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (viewModel.isRecording) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = viewModel.recordingDuration,
+                            color = Color.White,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                RecordButton(
+                    isRecording = viewModel.isRecording,
+                    amplitude = viewModel.amplitude,
+                    onClick = { viewModel.toggleRecording() }
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = if (viewModel.isRecording) "탭하여 녹음 완료" else "탭하여 녹음 시작",
+                    color = Color(0xFFD0BCFF).copy(alpha = 0.8f),
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.MusicNote,
+                contentDescription = null,
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "날씨에 맞는 장르를 추천해드려요",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+        }
+    }
+
+    if (showHistoryDialog) {
+        HistoryDialog(
+            viewModel = viewModel,
+            onDismiss = { showHistoryDialog = false }
+        )
+    }
+}
+
+@Composable
+fun Screen2_GenreSelection(viewModel: MainViewModel) {
+    val genres = listOf("팝", "재즈", "클래식", "록", "R&B", "힙합", "일렉트로닉", "발라드")
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { viewModel.currentScreen = AppScreen.MAIN }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color.White
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = "장르 선택",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "원하는 음악 스타일을 골라주세요",
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color.White.copy(alpha = 0.08f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Color(0xFFD0BCFF).copy(alpha = 0.15f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = null,
+                        tint = Color(0xFFD0BCFF),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
                     Text(
-                        text = "위치 권한 허용 시 주변 날씨에 맞는 음악 추천을 제공합니다.",
+                        text = "녹음 완료",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    val weatherKo = when (viewModel.weatherStatus) {
+                        "Sunny" -> "맑음"
+                        "Rainy" -> "비"
+                        "Cloudy" -> "흐림"
+                        "Snowy" -> "눈"
+                        else -> "분석 완료"
+                    }
+                    Text(
+                        text = "0:08 | $weatherKo 날씨",
                         color = Color.Gray,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
+                        fontSize = 12.sp
                     )
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-            // Recommended Badge Card
-            if (hasLocationPermission) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .background(Color(0xFF2C2A3D), shape = RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            for (i in 0 until 4) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "날씨 추천 장르",
-                        color = Color.Gray,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = recommendedGenre,
-                        color = Color(0xFFD0BCFF),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
+                    for (j in 0 until 2) {
+                        val index = i * 2 + j
+                        if (index < genres.size) {
+                            val genre = genres[index]
+                            val isSelected = viewModel.selectedGenre == genre
+                            val isRecommended = (viewModel.recommendedGenre == "Pop" && genre == "팝") ||
+                                    (viewModel.recommendedGenre == "Jazz" && genre == "재즈") ||
+                                    (viewModel.recommendedGenre == "Lo-Fi" && genre == "일렉트로닉") ||
+                                    (viewModel.recommendedGenre == "Classical" && genre == "클래식")
+
+                            val cardBgColor = if (isSelected) Color.White else Color(0xFF1E1C2A).copy(alpha = 0.6f)
+                            val cardTextColor = if (isSelected) Color(0xFF6200EE) else Color.White
+                            val borderColor = if (isRecommended) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.05f)
+
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(60.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(cardBgColor)
+                                    .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.selectGenre(genre) }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = genre,
+                                        color = cardTextColor,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (isRecommended) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "★",
+                                            color = if (isSelected) Color(0xFF6200EE) else Color(0xFF00E5FF),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                Button(
-                    onClick = onRequestLocationPermission,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2C2A3D)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(10.dp)
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.PhoneAndroid,
+                contentDescription = null,
+                tint = Color(0xFFD0BCFF),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "📱 ⌨️ 기기를 흔들거나 Spacebar를 눌러 랜덤 선택",
+                color = Color.Gray,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = { viewModel.generateMusic() },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.White
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .border(1.dp, Color(0xFFD0BCFF).copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Text(
+                text = "음악 생성하기",
+                color = Color(0xFF6200EE),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+    }
+}
+
+@Composable
+fun Screen3_Generating(viewModel: MainViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        val infiniteTransition = rememberInfiniteTransition(label = "generatingRotate")
+        val rotation by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rotate"
+        )
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(100.dp)
+        ) {
+            CircularProgressIndicator(
+                color = Color(0xFF00E5FF),
+                strokeWidth = 4.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+            Icon(
+                imageVector = Icons.Default.MusicNote,
+                contentDescription = null,
+                tint = Color(0xFFD0BCFF),
+                modifier = Modifier
+                    .size(44.dp)
+                    .scale(rotation / 360f * 0.2f + 0.9f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text(
+            text = "AI가 음악을 만들고 있어요",
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "허밍을 분석하여 맞춤 반주를 생성 중입니다",
+            color = Color.Gray,
+            fontSize = 12.sp
+        )
+
+        Spacer(modifier = Modifier.height(40.dp))
+
+        Column(
+            modifier = Modifier
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+                .padding(24.dp)
+                .fillMaxWidth(0.9f),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            ProgressItem(text = "허밍 분석 중", isActive = viewModel.generatingStep >= 1)
+            ProgressItem(text = "날씨 정보 반영 중", isActive = viewModel.generatingStep >= 2)
+            ProgressItem(text = "${viewModel.selectedGenre} 스타일 적용 중", isActive = viewModel.generatingStep >= 3)
+            ProgressItem(text = "가사 작성 중", isActive = viewModel.generatingStep >= 4)
+        }
+
+        Spacer(modifier = Modifier.height(40.dp))
+        Text(
+            text = "잠시만 기다려주세요...",
+            color = Color.Gray,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+fun ProgressItem(text: String, isActive: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (isActive) Color(0xFF00E5FF) else Color.Gray.copy(alpha = 0.4f))
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = text,
+            color = if (isActive) Color.White else Color.Gray,
+            fontSize = 14.sp,
+            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+fun Screen4_Playback(viewModel: MainViewModel) {
+    val file = viewModel.latestConvertedFile ?: return
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { viewModel.currentScreen = AppScreen.MAIN }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color.White
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "재생 & 가사",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFF2C2A3D), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "위치 승인",
+                        text = viewModel.selectedGenre,
                         color = Color(0xFFD0BCFF),
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Black
                     )
                 }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(100.dp)
+                        .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = "My Humming Song",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                val dateClean = file.dateStr.substringBefore(" ")
+                Text(
+                    text = "AI Generated • $dateClean",
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        if (file.lyrics.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.9f)
+            ) {
+                Text(
+                    text = "AI 추천 가사 (1절)",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+                        .padding(16.dp)
+                ) {
+                    val scrollState = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = file.lyrics,
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 18.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Slider(
+                value = viewModel.playbackPosition.toFloat(),
+                onValueChange = { viewModel.seekTo(it.toLong()) },
+                valueRange = 0f..viewModel.playbackDuration.toFloat().coerceAtLeast(1f),
+                colors = SliderDefaults.colors(
+                    activeTrackColor = Color(0xFF00E5FF),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.12f),
+                    thumbColor = Color(0xFFD0BCFF)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = formatTime(viewModel.playbackPosition),
+                    color = Color.Gray,
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = formatTime(viewModel.playbackDuration),
+                    color = Color.Gray,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { viewModel.seekTo(0L) },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SkipPrevious,
+                    contentDescription = "Rewind",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(24.dp))
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(60.dp)
+                    .background(Color.White, CircleShape)
+                    .clickable {
+                        if (viewModel.isPlaying) viewModel.pausePlayback() else viewModel.resumePlayback()
+                    }
+            ) {
+                Icon(
+                    imageVector = if (viewModel.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (viewModel.isPlaying) "Pause" else "Play",
+                    tint = Color(0xFF6200EE),
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(24.dp))
+            IconButton(
+                onClick = { viewModel.seekTo(viewModel.playbackDuration) },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SkipNext,
+                    contentDescription = "Forward",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
             }
         }
     }
 }
 
 @Composable
-fun GenreSelector(
-    selectedGenres: Set<String>,
-    recommendedGenre: String,
-    onGenreToggle: (String) -> Unit
+fun HistoryDialog(
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit
 ) {
-    val genres = listOf("Pop", "Jazz", "Rock", "Classical", "Lo-Fi")
+    var activeTab by remember { mutableStateOf(0) }
+    var fileToDelete by remember { mutableStateOf<Any?>(null) }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "장르 선택 (최소 1개 선택)",
-            color = Color.White.copy(alpha = 0.9f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1E1C2A)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .padding(16.dp)
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(24.dp))
         ) {
-            genres.forEach { genre ->
-                val isSelected = selectedGenres.contains(genre)
-                val isRecommended = genre == recommendedGenre
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "히스토리",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.Gray
+                        )
+                    }
+                }
 
-                val chipBgColor by animateColorAsState(
-                    targetValue = if (isSelected) Color(0xFFD0BCFF) else Color(0xFF1E1C2A),
-                    label = "chipBg"
-                )
-                val chipTextColor by animateColorAsState(
-                    targetValue = if (isSelected) Color(0xFF0F0E17) else Color.White,
-                    label = "chipText"
-                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF12111E), shape = RoundedCornerShape(12.dp))
+                        .padding(4.dp)
+                ) {
+                    TabButton(
+                        title = "녹음 (${viewModel.recordingsList.size})",
+                        isActive = activeTab == 0,
+                        onClick = { activeTab = 0 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    TabButton(
+                        title = "변환 곡 (${viewModel.convertedList.size})",
+                        isActive = activeTab == 1,
+                        onClick = { activeTab = 1 },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Box(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(chipBgColor)
-                        .border(
-                            width = 1.dp,
-                            color = if (isRecommended) Color(0xFF00E5FF) else Color.Transparent,
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .clickable { onGenreToggle(genre) }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = genre,
-                            color = chipTextColor,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (isRecommended) {
-                            Text(
-                                text = "★추천",
-                                color = if (isSelected) Color(0xFF0F0E17) else Color(0xFF00E5FF),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
+                    if (activeTab == 0) {
+                        if (viewModel.recordingsList.isEmpty()) {
+                            EmptyPlaceholder(text = "녹음 파일이 없습니다.")
+                        } else {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                items(viewModel.recordingsList) { recording ->
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2C2A3D).copy(alpha = 0.6f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.MusicNote,
+                                                contentDescription = null,
+                                                tint = Color(0xFFD0BCFF),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = recording.name,
+                                                    color = Color.White,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(text = "${recording.dateStr} | ${recording.size}", color = Color.Gray, fontSize = 10.sp)
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    viewModel.latestRecordedFile = recording
+                                                    viewModel.currentScreen = AppScreen.GENRE_SELECTION
+                                                    onDismiss()
+                                                },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.AutoAwesome,
+                                                    contentDescription = "Convert",
+                                                    tint = Color(0xFF00E5FF),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { fileToDelete = recording },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Delete",
+                                                    tint = Color.Red.copy(alpha = 0.8f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if (viewModel.convertedList.isEmpty()) {
+                            EmptyPlaceholder(text = "변환된 곡이 없습니다.")
+                        } else {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                items(viewModel.convertedList) { file ->
+                                    val isCurrentPlaying = viewModel.currentPlayingFile?.path == file.path
+                                    val cardColor = if (isCurrentPlaying) Color(0xFF1E3547) else Color(0xFF2C2A3D).copy(alpha = 0.6f)
+                                    val iconColor = if (isCurrentPlaying) Color(0xFF00E5FF) else Color(0xFFD0BCFF)
+
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = cardColor),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            viewModel.latestConvertedFile = file
+                                            viewModel.playFile(file)
+                                            viewModel.currentScreen = AppScreen.PLAYBACK
+                                            onDismiss()
+                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = Color(0xFF00E5FF),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = file.name,
+                                                    color = Color.White,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(text = "${file.dateStr} | ${file.size}", color = Color.Gray, fontSize = 10.sp)
+                                            }
+                                            Icon(
+                                                imageVector = if (isCurrentPlaying && viewModel.isPlaying) Icons.Default.Pause else Icons.Default.VolumeUp,
+                                                contentDescription = null,
+                                                tint = iconColor,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            IconButton(
+                                                onClick = { fileToDelete = file },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Delete",
+                                                    tint = Color.Red.copy(alpha = 0.8f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-fun RecordingsTabContainer(
-    recordings: List<RecordingFile>,
-    convertedList: List<ConvertedFile>,
-    selectedGenres: Set<String>,
-    onConvertClick: (RecordingFile) -> Unit,
-    currentPlayingFile: ConvertedFile?,
-    isPlaying: Boolean,
-    onItemClick: (ConvertedFile) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var activeTab by remember { mutableStateOf(0) } // 0: Humming, 1: AI Converted
-
-    Column(modifier = modifier) {
-        // Tab Layout Buttons
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF12111E), shape = RoundedCornerShape(12.dp))
-                .padding(4.dp)
-        ) {
-            TabButton(
-                title = "허밍 파일 (${recordings.size})",
-                isActive = activeTab == 0,
-                onClick = { activeTab = 0 },
-                modifier = Modifier.weight(1f)
-            )
-            TabButton(
-                title = "AI 변환 곡 (${convertedList.size})",
-                isActive = activeTab == 1,
-                onClick = { activeTab = 1 },
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Content lists
-        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            if (activeTab == 0) {
-                HummingList(
-                    recordings = recordings,
-                    selectedGenres = selectedGenres,
-                    onConvertClick = onConvertClick
+    if (fileToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { fileToDelete = null },
+            title = {
+                Text(
+                    text = "파일 삭제",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
-            } else {
-                ConvertedList(
-                    convertedList = convertedList,
-                    currentPlayingFile = currentPlayingFile,
-                    isPlaying = isPlaying,
-                    onItemClick = onItemClick
+            },
+            text = {
+                Text(
+                    text = "정말로 이 파일을 영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.9f)
                 )
-            }
-        }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val file = fileToDelete
+                        if (file is ConvertedFile) {
+                            viewModel.deleteConvertedFile(file)
+                        } else if (file is RecordingFile) {
+                            viewModel.deleteRecordingFile(file)
+                        }
+                        fileToDelete = null
+                    }
+                ) {
+                    Text(text = "삭제", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileToDelete = null }) {
+                    Text(text = "취소", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1C2A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
     }
 }
 
@@ -576,197 +1154,6 @@ fun TabButton(
 }
 
 @Composable
-fun HummingList(
-    recordings: List<RecordingFile>,
-    selectedGenres: Set<String>,
-    onConvertClick: (RecordingFile) -> Unit
-) {
-    if (recordings.isEmpty()) {
-        EmptyPlaceholder(text = "아직 녹음된 파일이 없습니다.\n마이크 버튼을 눌러 첫 허밍을 녹음해 보세요.")
-    } else {
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(recordings) { recording ->
-                HummingItem(
-                    recording = recording,
-                    selectedGenres = selectedGenres,
-                    onConvertClick = onConvertClick
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun HummingItem(
-    recording: RecordingFile,
-    selectedGenres: Set<String>,
-    onConvertClick: (RecordingFile) -> Unit
-) {
-    var showSnackBarMessage by remember { mutableStateOf(false) }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C2A)),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.MusicNote,
-                contentDescription = null,
-                tint = Color(0xFFD0BCFF),
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = recording.name,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row {
-                    Text(text = recording.dateStr, color = Color.Gray, fontSize = 11.sp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = recording.size, color = Color(0xFF00E5FF), fontSize = 11.sp)
-                }
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // AI Convert Action Button
-            IconButton(
-                onClick = {
-                    if (selectedGenres.isEmpty()) {
-                        showSnackBarMessage = true
-                    } else {
-                        onConvertClick(recording)
-                    }
-                },
-                modifier = Modifier
-                    .background(Color(0xFF2C2A3D), CircleShape)
-                    .size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = "AI Convert",
-                    tint = Color(0xFF00E5FF),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    }
-
-    if (showSnackBarMessage) {
-        AlertDialog(
-            onDismissRequest = { showSnackBarMessage = false },
-            title = { Text(text = "알림", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-            text = { Text(text = "상단의 장르 목록에서 변환을 희망하는 장르를 최소 1개 이상 선택해 주세요.", fontSize = 14.sp) },
-            confirmButton = {
-                TextButton(onClick = { showSnackBarMessage = false }) {
-                    Text(text = "확인", color = Color(0xFF00E5FF))
-                }
-            },
-            containerColor = Color(0xFF1E1C2A),
-            titleContentColor = Color.White,
-            textContentColor = Color.White
-        )
-    }
-}
-
-@Composable
-fun ConvertedList(
-    convertedList: List<ConvertedFile>,
-    currentPlayingFile: ConvertedFile?,
-    isPlaying: Boolean,
-    onItemClick: (ConvertedFile) -> Unit
-) {
-    if (convertedList.isEmpty()) {
-        EmptyPlaceholder(text = "변환된 AI 음원이 없습니다.\n허밍 파일 카드의 별 모양(AI) 버튼을 눌러보세요.")
-    } else {
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(convertedList) { file ->
-                val isCurrentPlaying = currentPlayingFile?.path == file.path
-                ConvertedItem(
-                    file = file,
-                    isCurrentPlaying = isCurrentPlaying,
-                    isPlaying = isCurrentPlaying && isPlaying,
-                    onClick = { onItemClick(file) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ConvertedItem(
-    file: ConvertedFile,
-    isCurrentPlaying: Boolean,
-    isPlaying: Boolean,
-    onClick: () -> Unit
-) {
-    val cardColor = if (isCurrentPlaying) Color(0xFF1E3547) else Color(0xFF14243A)
-    val iconColor = if (isCurrentPlaying) Color(0xFF00E5FF) else Color(0xFFD0BCFF)
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = cardColor),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = Color(0xFF00E5FF),
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = file.name,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row {
-                    Text(text = file.dateStr, color = Color.Gray, fontSize = 11.sp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = file.size, color = Color(0xFFD0BCFF), fontSize = 11.sp)
-                }
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.VolumeUp,
-                contentDescription = null,
-                tint = iconColor,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
-
-@Composable
 fun EmptyPlaceholder(text: String) {
     Box(
         modifier = Modifier
@@ -789,97 +1176,6 @@ fun EmptyPlaceholder(text: String) {
                 textAlign = TextAlign.Center,
                 lineHeight = 18.sp
             )
-        }
-    }
-}
-
-@Composable
-fun AIConversionDialog(
-    progressText: String,
-    targetFile: String
-) {
-    Dialog(onDismissRequest = {}) {
-        Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C2A)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                // Nebula / Rotating AI Indicator
-                val infiniteTransition = rememberInfiniteTransition(label = "aiRotate")
-                val rotation by infiniteTransition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 360f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(2000, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "rotate"
-                )
-
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.size(80.dp)
-                ) {
-                    CircularProgressIndicator(
-                        color = Color(0xFF00E5FF),
-                        strokeWidth = 4.dp,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .scale(1.1f)
-                    )
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = Color(0xFFD0BCFF),
-                        modifier = Modifier
-                            .size(36.dp)
-                            .scale(rotation / 360f * 0.4f + 0.8f) // Pulsing icon
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-                
-                Text(
-                    text = "Gemini Lyria 3 작곡 합성 중",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    text = "대상 파일: $targetFile",
-                    color = Color.Gray,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = progressText,
-                    color = Color(0xFF00E5FF),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center
-                )
-            }
         }
     }
 }
@@ -1150,186 +1446,4 @@ private fun formatTime(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
-}
-
-@Composable
-fun SmartMusicPlayer(
-    file: ConvertedFile,
-    isPlaying: Boolean,
-    position: Long,
-    duration: Long,
-    onPlayPause: () -> Unit,
-    onSeek: (Long) -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1C2A).copy(alpha = 0.92f)
-        ),
-        modifier = modifier
-            .fillMaxWidth()
-            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp)
-        ) {
-            // Header: Title and Close button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "NOW PLAYING",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = file.name,
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close Player",
-                        tint = Color.Gray,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Mood Badge (FR-04)
-            if (file.mood.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .background(Color(0xFF2C2A3D), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Mood: ${file.mood}",
-                        color = Color(0xFFD0BCFF),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // Lyrics Display (FR-04)
-            if (file.lyrics.isNotEmpty()) {
-                Text(
-                    text = "Lyrics",
-                    color = Color.Gray,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(90.dp)
-                        .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .padding(12.dp)
-                ) {
-                    val scrollState = rememberScrollState()
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = file.lyrics,
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // ExoPlayer Seek Bar (FR-05)
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Slider(
-                    value = position.toFloat(),
-                    onValueChange = { onSeek(it.toLong()) },
-                    valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
-                    colors = SliderDefaults.colors(
-                        activeTrackColor = Color(0xFF00E5FF),
-                        inactiveTrackColor = Color.White.copy(alpha = 0.12f),
-                        thumbColor = Color(0xFFD0BCFF)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = formatTime(position),
-                        color = Color.Gray,
-                        fontSize = 11.sp
-                    )
-                    Text(
-                        text = formatTime(duration),
-                        color = Color.Gray,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Player Buttons (FR-05)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(Color(0xFFD0BCFF), CircleShape)
-                        .clickable { onPlayPause() }
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color(0xFF0F0E17),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-    }
 }
