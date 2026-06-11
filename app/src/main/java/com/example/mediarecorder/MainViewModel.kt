@@ -27,6 +27,9 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import android.util.Base64
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -55,8 +58,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         WeatherApiService.create()
     }
 
-    private val geminiMusicService by lazy {
-        GeminiMusicService.create()
+    private val replicateMusicService by lazy {
+        ReplicateMusicService.create()
     }
 
     private val sensorManager by lazy {
@@ -216,71 +219,113 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
                 // Step 1: Humming analysis
                 generatingStep = 1
                 conversionProgressText = "허밍 분석 중"
-                delay(1200)
+                delay(1000)
 
                 // Step 2: Weather info
                 generatingStep = 2
                 conversionProgressText = "날씨 정보 반영 중"
-                delay(1200)
+                delay(1000)
 
                 // Step 3: Synthesis
                 generatingStep = 3
                 conversionProgressText = "$selectedGenre 스타일 적용 중"
-                delay(1200)
+                delay(1000)
 
                 // Step 4: Lyrics
                 generatingStep = 4
                 conversionProgressText = "가사 작성 중"
-                delay(1200)
+                delay(1000)
 
-                // Call service
-                val file = File(recording.path)
-                val requestFile = file.asRequestBody("audio/m4a".toMediaTypeOrNull())
-                val body = MultipartBody.Part.createFormData("audio", file.name, requestFile)
-                val genrePart = selectedGenre.toRequestBody("text/plain".toMediaTypeOrNull())
-                val weatherPart = weatherStatus.toRequestBody("text/plain".toMediaTypeOrNull())
-                val locationPart = locationName.toRequestBody("text/plain".toMediaTypeOrNull())
-
-                val response = geminiMusicService.convertMusic(body, genrePart, weatherPart, locationPart)
                 var generatedFile: ConvertedFile? = null
 
-                if (response.isSuccessful) {
-                    val responseBody = response.body()
-                    if (responseBody != null) {
-                        val outputDir = File(context.getExternalFilesDir(null), "Converted").apply {
-                            if (!exists()) mkdirs()
-                        }
-                        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                        val cleanName = recording.name.substringBeforeLast(".")
-                        val outputFileName = "converted_${cleanName}_$timestamp.m4a"
-                        val outputFile = File(outputDir, outputFileName)
+                if (REPLICATE_API_TOKEN.isNotBlank()) {
+                    generatingStep = 3
+                    conversionProgressText = "Replicate AI 음악 생성 요청 중..."
+                    
+                    val file = File(recording.path)
+                    val base64Audio = fileToBase64DataUri(file)
+                    val prompt = "A $selectedGenre humming song, $weatherStatus weather theme, matching atmosphere of $locationName. Make it high quality, catchy, matching melody."
+                    
+                    val request = ReplicatePredictionRequest(
+                        version = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
+                        input = mapOf(
+                            "prompt" to prompt,
+                            "input_audio" to base64Audio,
+                            "model_version" to "stereo-melody-large",
+                            "duration" to 15,
+                            "output_format" to "mp3"
+                        )
+                    )
+                    
+                    val createResponse = replicateMusicService.createPrediction("Token $REPLICATE_API_TOKEN", request)
+                    if (createResponse.isSuccessful && createResponse.body() != null) {
+                        var prediction = createResponse.body()!!
+                        val predictionId = prediction.id
+                        var attempts = 0
+                        val maxAttempts = 30 // 60 seconds timeout
                         
-                        responseBody.byteStream().use { input ->
-                            FileOutputStream(outputFile).use { output ->
-                                input.copyTo(output)
+                        while ((prediction.status != "succeeded" && prediction.status != "failed") && attempts < maxAttempts) {
+                            delay(2000)
+                            attempts++
+                            val statusResponse = replicateMusicService.getPrediction("Token $REPLICATE_API_TOKEN", predictionId)
+                            if (statusResponse.isSuccessful && statusResponse.body() != null) {
+                                prediction = statusResponse.body()!!
+                                conversionProgressText = "AI 음악 생성 중 (상태: ${prediction.status})"
+                            } else {
+                                break
                             }
                         }
                         
-                        val serverMood = response.headers()["x-music-mood"] ?: response.headers()["x-mood"]
-                        val serverLyrics = response.headers()["x-music-lyrics"] ?: response.headers()["x-lyrics"]
-                        
-                        val mood = decodeHeader(serverMood) ?: getMockMood(weatherStatus, selectedGenre)
-                        val lyrics = decodeHeader(serverLyrics) ?: getMockLyrics(weatherStatus, selectedGenre)
-                        
-                        val jsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
-                        val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
-                        jsonFile.writeText(Gson().toJson(jsonMap))
-
-                        generatedFile = ConvertedFile(
-                            name = outputFileName,
-                            path = outputFile.absolutePath,
-                            size = formatFileSize(outputFile.length()),
-                            dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(outputFile.lastModified())),
-                            mood = mood,
-                            lyrics = lyrics
-                        )
+                        if (prediction.status == "succeeded" && prediction.output != null) {
+                            val outputUrl = when (val out = prediction.output) {
+                                is String -> out
+                                is List<*> -> out.firstOrNull() as? String
+                                else -> null
+                            }
+                            
+                            if (outputUrl != null) {
+                                conversionProgressText = "완료된 곡 다운로드 중..."
+                                val outputDir = File(context.getExternalFilesDir(null), "Converted").apply {
+                                    if (!exists()) mkdirs()
+                                }
+                                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                                val cleanName = recording.name.substringBeforeLast(".")
+                                val outputFileName = "converted_${cleanName}_$timestamp.mp3"
+                                val outputFile = File(outputDir, outputFileName)
+                                
+                                val client = OkHttpClient()
+                                val downloadRequest = Request.Builder().url(outputUrl).build()
+                                client.newCall(downloadRequest).execute().use { downloadResponse ->
+                                    if (downloadResponse.isSuccessful && downloadResponse.body != null) {
+                                        downloadResponse.body!!.byteStream().use { input ->
+                                            FileOutputStream(outputFile).use { output ->
+                                                input.copyTo(output)
+                                            }
+                                        }
+                                        
+                                        val mood = getMockMood(weatherStatus, selectedGenre)
+                                        val lyrics = getMockLyrics(weatherStatus, selectedGenre)
+                                        
+                                        val jsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
+                                        val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
+                                        jsonFile.writeText(Gson().toJson(jsonMap))
+                                        
+                                        generatedFile = ConvertedFile(
+                                            name = outputFileName,
+                                            path = outputFile.absolutePath,
+                                            size = formatFileSize(outputFile.length()),
+                                            dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(outputFile.lastModified())),
+                                            mood = mood,
+                                            lyrics = lyrics
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
-                } else {
+                }
+
+                if (generatedFile == null) {
                     generatedFile = saveMockConvertedFileAndReturn(recording, selectedGenre)
                 }
 
@@ -309,6 +354,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
                 loadConvertedRecordings()
             }
         }
+    }
+
+    private fun fileToBase64DataUri(file: File): String {
+        val bytes = file.readBytes()
+        val base64String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return "data:audio/x-m4a;base64,$base64String"
     }
 
     private suspend fun saveMockConvertedFileAndReturn(recording: RecordingFile, genre: String): ConvertedFile? = withContext(Dispatchers.IO) {
@@ -395,6 +446,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         }
     }
 
+    fun renameConvertedFile(file: ConvertedFile, newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val audioFile = File(file.path)
+            if (!audioFile.exists()) return@launch
+            
+            val ext = audioFile.extension
+            val cleanNewName = if (newName.endsWith(".$ext")) newName else "$newName.$ext"
+            val newAudioFile = File(audioFile.parentFile, cleanNewName)
+            
+            val jsonFile = File(audioFile.parent, audioFile.name.substringBeforeLast(".") + ".json")
+            val newJsonFile = File(audioFile.parent, cleanNewName.substringBeforeLast(".") + ".json")
+            
+            if (audioFile.renameTo(newAudioFile)) {
+                if (jsonFile.exists()) {
+                    jsonFile.renameTo(newJsonFile)
+                }
+                
+                withContext(Dispatchers.Main) {
+                    val updatedFile = ConvertedFile(
+                        name = cleanNewName,
+                        path = newAudioFile.absolutePath,
+                        size = file.size,
+                        dateStr = file.dateStr,
+                        mood = file.mood,
+                        lyrics = file.lyrics
+                    )
+                    
+                    if (latestConvertedFile?.path == file.path) {
+                        latestConvertedFile = updatedFile
+                    }
+                    if (currentPlayingFile?.path == file.path) {
+                        currentPlayingFile = updatedFile
+                    }
+                    loadConvertedRecordings()
+                }
+            }
+        }
+    }
+
     private fun decodeHeader(value: String?): String? {
         if (value == null) return null
         return try {
@@ -415,43 +505,135 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     private fun getMockLyrics(weather: String, genre: String): String {
-        return when (weather) {
-            "Sunny" -> """
-                (Verse 1)
-                눈부신 햇살이 가득한 날에
-                우리는 함께 거리를 걸어
-                너의 미소가 내 맘을 밝혀주고
-                이 음악 속에 우리 노랜 시작돼
-            """.trimIndent()
-            "Rainy" -> """
-                (Verse 1)
-                창밖에 내리는 빗소리를 따라
-                $genre 선율이 방안에 퍼지네
-                따뜻한 커피 한 잔을 손에 쥐고
-                흘러간 기억들을 가만히 그리네
-            """.trimIndent()
-            "Cloudy" -> """
-                (Verse 1)
-                구름 뒤에 숨은 햇살 사이로
-                시간이 느리게만 흘러가네
-                오래된 턴테이블 위로 흐르는 곡
-                아무 생각 없이 나른해지는 오후
-            """.trimIndent()
-            "Snowy" -> """
-                (Verse 1)
-                하늘에서 조용히 내리는 눈송이
-                세상을 하얗게 덮어 가네
-                피아노 건반 위에 쌓인 멜로디
-                따뜻한 겨울의 노래가 울려 퍼지네
-            """.trimIndent()
-            else -> """
-                (Verse 1)
-                조용히 흐르는 시간 속에서
-                작은 멜로디를 건네어 본다
-                마음속에 깊이 담아두었던 말들
-                노래가 되어 너에게 전해지기를
-            """.trimIndent()
+        val lines1 = when (weather) {
+            "Sunny" -> listOf(
+                "눈부신 햇살이 가득한 오늘",
+                "푸른 하늘 아래 바람을 느끼며",
+                "노란 햇볕이 내 어깨를 비추는 날",
+                "반짝이는 거리를 가볍게 걸을 때",
+                "맑게 갠 날씨가 나를 미소 짓게 해"
+            )
+            "Rainy" -> listOf(
+                "창밖에 조용히 빗소리가 내리고",
+                "우산 아래 너와 나란히 서서",
+                "촉촉이 젖은 거리를 바라보며",
+                "흐린 유리창에 비친 내 모습",
+                "빗방울이 하나둘 떨어지는 오후"
+            )
+            "Cloudy" -> listOf(
+                "구름 가득한 하늘 아래 차분해지는 시간",
+                "안개 낀 아침 공기를 마시며",
+                "어두워진 하늘을 가만히 올려다봐",
+                "빛바랜 오후의 회색빛 분위기",
+                "흐릿한 세상이 오히려 포근해"
+            )
+            "Snowy" -> listOf(
+                "하얀 눈송이가 소복이 쌓이는 날",
+                "차가운 겨울바람이 뺨을 스칠 때",
+                "온 세상이 하얗게 변해버린 오늘",
+                "창밖으로 조용히 내리는 함박눈",
+                "하얀 김이 입가에 번지는 차가운 아침"
+            )
+            else -> listOf(
+                "조용히 흐르는 시간의 틈 사이로",
+                "바쁜 하루 끝에 찾아온 이 평화",
+                "조용한 방 안 가만히 앉아",
+                "어디선가 불어오는 미풍을 따라",
+                "혼자만의 생각에 잠기는 시간"
+            )
         }
+
+        val lines2 = when (weather) {
+            "Sunny" -> listOf(
+                "너와 함께 걷는 이 길이 즐거워",
+                "마음속 깊이 쌓인 걱정은 날려버려",
+                "콧노래가 흥얼흥얼 흘러나와",
+                "작은 설렘이 내 맘에 가득 차올라",
+                "어디로든 떠나고 싶은 기분이야"
+            )
+            "Rainy" -> listOf(
+                "오래된 음악을 조용히 틀어봐",
+                "기억 속의 너를 가만히 떠올려",
+                "따뜻한 커피 향이 방을 채우고",
+                "지나간 추억들이 문득 그리워져",
+                "차분한 이 감정에 나를 맡겨둘래"
+            )
+            "Cloudy" -> listOf(
+                "서두르지 않고 한 걸음씩 걸어가",
+                "생각이 꼬리를 물고 이어지는 밤",
+                "마음의 소리에 귀를 기울여봐",
+                "나른한 오후의 여유를 즐기며",
+                "조금은 느려져도 괜찮을 것 같아"
+            )
+            "Snowy" -> listOf(
+                "시린 손을 주머니에 쏙 넣고서",
+                "어릴 적 타오르던 벽난로가 그리워",
+                "너와 함께 나누던 따뜻한 온기",
+                "소리 없이 다가온 하얀 겨울이야",
+                "작은 온기를 나누며 미소 짓네"
+            )
+            else -> listOf(
+                "소박한 일상 속 행복을 찾아봐",
+                "너에게 전하고 싶은 말이 있어",
+                "머릿속 복잡한 일은 다 잊은 채",
+                "나만의 쉼표 하나를 그려봐",
+                "마음이 흐르는 대로 따라가네"
+            )
+        }
+
+        val lines3 = when (weather) {
+            "Sunny" -> listOf(
+                "신나는 $genre 비트가 울려 퍼지고",
+                "밝은 $genre 멜로디에 몸을 실어봐",
+                "상큼한 $genre 선율이 귓가를 스치네",
+                "이 톡톡 튀는 $genre 노래를 부르며",
+                "너와 나의 $genre 하모니가 어우러져"
+            )
+            "Rainy" -> listOf(
+                "차분한 $genre 선율이 빗방울과 닮았어",
+                "촉촉한 $genre 리듬에 내 맘을 적셔",
+                "슬픈 $genre 코드가 가슴을 파고들어",
+                "부드러운 $genre 감성이 흘러넘치네",
+                "빗소리와 하나가 되는 $genre 음악"
+            )
+            "Cloudy" -> listOf(
+                "은은한 $genre 톤이 오늘따라 깊어",
+                "나른한 $genre 템포에 맞춰 쉬어가",
+                "몽환적인 $genre 분위기에 취해보는 오후",
+                "조금은 쓸쓸한 $genre 멜로디의 온기",
+                "마음을 어루만지는 $genre 리듬"
+            )
+            "Snowy" -> listOf(
+                "따뜻한 $genre 멜로디가 흩날리고",
+                "포근한 $genre 편곡이 세상을 감싸네",
+                "클래식한 $genre 감성이 피어나는 밤",
+                "벽난로 앞 들려오는 $genre 노래",
+                "하얀 겨울에 어울리는 $genre 연주"
+            )
+            else -> listOf(
+                "잔잔한 $genre 선율이 마음을 달래고",
+                "귓가에 속삭이는 $genre 멜로디",
+                "이 아름다운 $genre 음율 속에서",
+                "언제 들어도 편안한 $genre 비트",
+                "마음속에 깊이 남는 $genre 한 구절"
+            )
+        }
+
+        val lines4 = listOf(
+            "오늘의 이 순간을 노랫말에 담아볼게.",
+            "영원히 기억될 우리만의 멜로디야.",
+            "이 음악이 너에게 작은 위로가 되길.",
+            "내일도 우리는 함께 노래 부를 거야.",
+            "마음속 깊이 간직할 추억이 하나 더 늘었어."
+        )
+
+        return """
+            (Verse 1)
+            ${lines1.random()}
+            ${lines2.random()}
+            ${lines3.random()}
+            ${lines4.random()}
+        """.trimIndent()
     }
 
     // --- FR-06 Accelerometer Sensor Listener ---
@@ -602,7 +784,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         val context = getApplication<Application>().applicationContext
         val directory = File(context.getExternalFilesDir(null), "Converted")
         if (directory.exists() && directory.isDirectory) {
-            val files = directory.listFiles { file -> file.isFile && file.extension == "m4a" }
+            val files = directory.listFiles { file -> file.isFile && (file.extension == "m4a" || file.extension == "mp3") }
             convertedList = files?.map { file ->
                 val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(file.lastModified()))
                 

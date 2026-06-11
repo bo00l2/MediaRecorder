@@ -115,6 +115,7 @@ fun MainScreen(viewModel: MainViewModel) {
     }
 
     val focusRequester = remember { FocusRequester() }
+    var fileToRename by remember { mutableStateOf<ConvertedFile?>(null) }
 
     LaunchedEffect(viewModel.currentScreen) {
         if (viewModel.currentScreen == AppScreen.GENRE_SELECTION) {
@@ -156,12 +157,74 @@ fun MainScreen(viewModel: MainViewModel) {
                     AppScreen.MAIN -> Screen1_Record(
                         viewModel = viewModel, 
                         hasLocation = hasLocation, 
-                        onRequestLocation = { permissionsState.launchMultiplePermissionRequest() }
+                        onRequestLocation = { permissionsState.launchMultiplePermissionRequest() },
+                        onRenameClick = { fileToRename = it }
                     )
                     AppScreen.GENRE_SELECTION -> Screen2_GenreSelection(viewModel = viewModel)
                     AppScreen.GENERATING -> Screen3_Generating(viewModel = viewModel)
-                    AppScreen.PLAYBACK -> Screen4_Playback(viewModel = viewModel)
+                    AppScreen.PLAYBACK -> Screen4_Playback(
+                        viewModel = viewModel,
+                        onRenameClick = { fileToRename = it }
+                    )
                 }
+            }
+
+            if (fileToRename != null) {
+                var tempName by remember(fileToRename) { mutableStateOf(fileToRename!!.name.substringBeforeLast(".")) }
+                AlertDialog(
+                    onDismissRequest = { fileToRename = null },
+                    title = {
+                        Text(
+                            text = "곡 이름 변경",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    },
+                    text = {
+                        Column {
+                            Text(
+                                text = "새로운 곡 이름을 입력하세요:",
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            OutlinedTextField(
+                                value = tempName,
+                                onValueChange = { tempName = it },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedBorderColor = Color(0xFF00E5FF),
+                                    unfocusedBorderColor = Color.White.copy(alpha = 0.2f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val file = fileToRename
+                                if (file != null && tempName.isNotBlank()) {
+                                    viewModel.renameConvertedFile(file, tempName)
+                                }
+                                fileToRename = null
+                            }
+                        ) {
+                            Text(text = "변경", color = Color(0xFF00E5FF))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { fileToRename = null }) {
+                            Text(text = "취소", color = Color.Gray)
+                        }
+                    },
+                    containerColor = Color(0xFF1E1C2A),
+                    titleContentColor = Color.White,
+                    textContentColor = Color.White
+                )
             }
         }
     }
@@ -171,7 +234,8 @@ fun MainScreen(viewModel: MainViewModel) {
 fun Screen1_Record(
     viewModel: MainViewModel,
     hasLocation: Boolean,
-    onRequestLocation: () -> Unit
+    onRequestLocation: () -> Unit,
+    onRenameClick: (ConvertedFile) -> Unit
 ) {
     var showHistoryDialog by remember { mutableStateOf(false) }
 
@@ -327,7 +391,8 @@ fun Screen1_Record(
     if (showHistoryDialog) {
         HistoryDialog(
             viewModel = viewModel,
-            onDismiss = { showHistoryDialog = false }
+            onDismiss = { showHistoryDialog = false },
+            onRenameClick = onRenameClick
         )
     }
 }
@@ -643,8 +708,12 @@ fun ProgressItem(text: String, isActive: Boolean) {
 }
 
 @Composable
-fun Screen4_Playback(viewModel: MainViewModel) {
+fun Screen4_Playback(
+    viewModel: MainViewModel,
+    onRenameClick: (ConvertedFile) -> Unit
+) {
     val file = viewModel.latestConvertedFile ?: return
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -656,24 +725,37 @@ fun Screen4_Playback(viewModel: MainViewModel) {
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            IconButton(
-                onClick = { viewModel.currentScreen = AppScreen.MAIN }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Back",
-                    tint = Color.White
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { viewModel.currentScreen = AppScreen.MAIN }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "재생 & 가사",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "재생 & 가사",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
+            
+            IconButton(
+                onClick = { showDeleteConfirm = true }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = Color.Red.copy(alpha = 0.8f)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -717,12 +799,32 @@ fun Screen4_Playback(viewModel: MainViewModel) {
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                Text(
-                    text = "My Humming Song",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Text(
+                        text = file.name.substringBeforeLast("."),
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = { onRenameClick(file) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Rename",
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 val dateClean = file.dateStr.substringBefore(" ")
                 Text(
@@ -854,12 +956,53 @@ fun Screen4_Playback(viewModel: MainViewModel) {
             }
         }
     }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = {
+                Text(
+                    text = "곡 삭제",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Text(
+                    text = "정말로 이 곡을 영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteConvertedFile(file)
+                        viewModel.currentScreen = AppScreen.MAIN
+                        showDeleteConfirm = false
+                    }
+                ) {
+                    Text(text = "삭제", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(text = "취소", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1C2A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
 }
 
 @Composable
 fun HistoryDialog(
     viewModel: MainViewModel,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onRenameClick: (ConvertedFile) -> Unit
 ) {
     var activeTab by remember { mutableStateOf(0) }
     var fileToDelete by remember { mutableStateOf<Any?>(null) }
@@ -1037,7 +1180,7 @@ fun HistoryDialog(
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = file.name,
+                                                    text = file.name.substringBeforeLast("."),
                                                     color = Color.White,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.SemiBold,
@@ -1053,6 +1196,17 @@ fun HistoryDialog(
                                                 modifier = Modifier.size(18.dp)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
+                                            IconButton(
+                                                onClick = { onRenameClick(file) },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Rename",
+                                                    tint = Color(0xFF00E5FF),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                             IconButton(
                                                 onClick = { fileToDelete = file },
                                                 modifier = Modifier.size(32.dp)
