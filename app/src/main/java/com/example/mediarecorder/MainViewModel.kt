@@ -244,7 +244,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
                     
                     val file = File(recording.path)
                     val base64Audio = fileToBase64DataUri(file)
-                    val prompt = "A $selectedGenre humming song, $weatherStatus weather theme, matching atmosphere of $locationName. Make it high quality, catchy, matching melody."
+                    val timeSlotKo = getCurrentTimeSlot()
+                    val timeSlotEng = getCurrentTimeSlotEng()
+                    val prompt = "A $selectedGenre humming song created during $timeSlotEng ($timeSlotKo), $weatherStatus weather theme, matching atmosphere of $locationName. Make it high quality, catchy, matching melody."
                     
                     val request = ReplicatePredictionRequest(
                         version = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
@@ -370,23 +372,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val cleanName = recording.name.substringBeforeLast(".")
-        val mockFileName = "converted_${cleanName}_$timestamp.m4a"
+        val mockFileName = "converted_${cleanName}_$timestamp.mp3"
         val mockFile = File(outputDir, mockFileName)
 
         val sourceFile = File(recording.path)
-        if (sourceFile.exists()) {
-            try {
-                FileInputStream(sourceFile).use { input ->
-                    FileOutputStream(mockFile).use { output ->
-                        input.copyTo(output)
+        var fileDownloaded = false
+        try {
+            val client = OkHttpClient()
+            val sampleUrl = "https://github.com/rafaelreis-hotmart/Audio-Sample-files/raw/master/sample.mp3"
+            val downloadRequest = Request.Builder().url(sampleUrl).build()
+            client.newCall(downloadRequest).execute().use { downloadResponse ->
+                if (downloadResponse.isSuccessful && downloadResponse.body != null) {
+                    downloadResponse.body!!.byteStream().use { input ->
+                        FileOutputStream(mockFile).use { output ->
+                            input.copyTo(output)
+                        }
                     }
+                    fileDownloaded = true
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (!fileDownloaded) {
+            if (sourceFile.exists()) {
+                try {
+                    FileInputStream(sourceFile).use { input ->
+                        FileOutputStream(mockFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    return@withContext null
+                }
+            } else {
                 return@withContext null
             }
-        } else {
-            return@withContext null
         }
 
         val mockJsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
@@ -494,13 +517,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         }
     }
 
+    fun getCurrentTimeSlot(): String {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return when (hour) {
+            in 0..5 -> "새벽"
+            in 6..11 -> "아침"
+            in 12..17 -> "한낮"
+            in 18..20 -> "저녁"
+            else -> "야간"
+        }
+    }
+
+    fun getCurrentTimeSlotEng(): String {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return when (hour) {
+            in 0..5 -> "dawn"
+            in 6..11 -> "morning"
+            in 12..17 -> "midday"
+            in 18..20 -> "evening"
+            else -> "night"
+        }
+    }
+
     private fun getMockMood(weather: String, genre: String): String {
+        val timeSlot = getCurrentTimeSlot()
         return when (weather) {
-            "Sunny" -> "맑은 햇살 아래 흐르는 밝고 활기찬 $genre 분위기"
-            "Rainy" -> "창밖의 빗소리와 어우러지는 촉촉하고 감성적인 $genre 분위기"
-            "Cloudy" -> "차분하고 포근한 구름 사이로 스며드는 나른한 $genre 분위기"
-            "Snowy" -> "하얀 눈밭 위에 펼쳐지는 따뜻하고 평화로운 $genre 분위기"
-            else -> "편안하고 어쿠스틱한 $genre 분위기"
+            "Sunny" -> "맑은 햇살 아래 흐르는 밝고 활기찬 $genre 분위기 ($timeSlot)"
+            "Rainy" -> "창밖의 빗소리와 어우러지는 촉촉하고 감성적인 $genre 분위기 ($timeSlot)"
+            "Cloudy" -> "차분하고 포근한 구름 사이로 스며드는 나른한 $genre 분위기 ($timeSlot)"
+            "Snowy" -> "하얀 눈밭 위에 펼쳐지는 따뜻하고 평화로운 $genre 분위기 ($timeSlot)"
+            else -> "편안하고 어쿠스틱한 $genre 분위기 ($timeSlot)"
         }
     }
 
@@ -627,9 +673,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
             "마음속 깊이 간직할 추억이 하나 더 늘었어."
         )
 
+        val timeSlot = getCurrentTimeSlot()
+        val timeLines = when (timeSlot) {
+            "새벽" -> listOf(
+                "고요한 새벽길을 홀로 걸으며",
+                "새벽녘 스며드는 푸른 어둠 속에",
+                "모두가 잠든 차가운 새벽에"
+            )
+            "아침" -> listOf(
+                "눈부신 아침 햇살에 눈을 뜨며",
+                "새 아침이 시작되는 기분 좋은 소리",
+                "싱그러운 아침 공기를 품에 안고"
+            )
+            "한낮" -> listOf(
+                "따스한 한낮의 햇볕 아래에서",
+                "나른한 오후의 햇살이 가득할 때",
+                "한낮의 눈부신 하늘을 우러러보며"
+            )
+            "저녁" -> listOf(
+                "붉게 물드는 저녁 노을을 보며",
+                "하루가 저무는 노을빛 아래 서서",
+                "어스름한 저녁 거리의 불빛들을 지나"
+            )
+            else -> listOf( // "야간" (밤)
+                "어두운 밤하늘 별빛을 따라서",
+                "조용히 깊어가는 밤바람 소리 속에",
+                "이 어둡고 차분한 밤의 정적 속에서"
+            )
+        }
+
         return """
             (Verse 1)
-            ${lines1.random()}
+            ${timeLines.random()}
             ${lines2.random()}
             ${lines3.random()}
             ${lines4.random()}
@@ -738,6 +813,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
             if (isPlaying) {
                 player.pause()
             } else {
+                if (player.playbackState == Player.STATE_ENDED) {
+                    player.seekTo(0)
+                }
                 player.play()
             }
         } else {
@@ -755,7 +833,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
     }
 
     fun resumePlayback() {
-        exoPlayer?.play()
+        exoPlayer?.let {
+            if (it.playbackState == Player.STATE_ENDED) {
+                it.seekTo(0)
+            }
+            it.play()
+        }
     }
 
     fun seekTo(positionMs: Long) {

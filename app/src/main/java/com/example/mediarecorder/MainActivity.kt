@@ -56,7 +56,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MediaRecorderTheme {
+            val isNight = remember {
+                val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                hour >= 20 || hour < 6
+            }
+            MediaRecorderTheme(darkTheme = isNight || androidx.compose.foundation.isSystemInDarkTheme()) {
                 MainScreen(viewModel = viewModel)
             }
         }
@@ -96,22 +100,40 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 
-    val backgroundBrush = when (viewModel.weatherStatus) {
-        "Sunny" -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF13111C), Color(0xFF3A2426), Color(0xFF663B2F))
+    val isNight = remember {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        hour >= 20 || hour < 6
+    }
+
+    val animatedGradient = rememberAnimatedGradientBrush(
+        colors = getColorsForGenre(viewModel.selectedGenre)
+    )
+
+    val backgroundBrush = if (viewModel.currentScreen == AppScreen.PLAYBACK) {
+        animatedGradient
+    } else if (isNight) {
+        // Calm night-time theme gradient (deep, dark, atmospheric)
+        Brush.verticalGradient(
+            colors = listOf(Color(0xFF050510), Color(0xFF0D1127), Color(0xFF181D3F))
         )
-        "Rainy" -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF0A0C16), Color(0xFF14243A), Color(0xFF1E3547))
-        )
-        "Cloudy" -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF0F0E13), Color(0xFF222030), Color(0xFF333045))
-        )
-        "Snowy" -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF070C1B), Color(0xFF1C2742), Color(0xFF405775))
-        )
-        else -> Brush.verticalGradient(
-            colors = listOf(Color(0xFF0F0E17), Color(0xFF1B1A24))
-        )
+    } else {
+        when (viewModel.weatherStatus) {
+            "Sunny" -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF13111C), Color(0xFF3A2426), Color(0xFF663B2F))
+            )
+            "Rainy" -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF0A0C16), Color(0xFF14243A), Color(0xFF1E3547))
+            )
+            "Cloudy" -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF0F0E13), Color(0xFF222030), Color(0xFF333045))
+            )
+            "Snowy" -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF070C1B), Color(0xFF1C2742), Color(0xFF405775))
+            )
+            else -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF0F0E17), Color(0xFF1B1A24))
+            )
+        }
     }
 
     val focusRequester = remember { FocusRequester() }
@@ -153,19 +175,41 @@ fun MainScreen(viewModel: MainViewModel) {
                     modifier = Modifier.align(Alignment.Center)
                 )
             } else {
-                when (viewModel.currentScreen) {
-                    AppScreen.MAIN -> Screen1_Record(
-                        viewModel = viewModel, 
-                        hasLocation = hasLocation, 
-                        onRequestLocation = { permissionsState.launchMultiplePermissionRequest() },
-                        onRenameClick = { fileToRename = it }
-                    )
-                    AppScreen.GENRE_SELECTION -> Screen2_GenreSelection(viewModel = viewModel)
-                    AppScreen.GENERATING -> Screen3_Generating(viewModel = viewModel)
-                    AppScreen.PLAYBACK -> Screen4_Playback(
-                        viewModel = viewModel,
-                        onRenameClick = { fileToRename = it }
-                    )
+                val showMiniPlayer = viewModel.currentPlayingFile != null &&
+                        viewModel.currentScreen != AppScreen.PLAYBACK &&
+                        viewModel.currentScreen != AppScreen.GENERATING
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = if (showMiniPlayer) 80.dp else 0.dp)
+                    ) {
+                        when (viewModel.currentScreen) {
+                            AppScreen.MAIN -> Screen1_Record(
+                                viewModel = viewModel, 
+                                hasLocation = hasLocation, 
+                                onRequestLocation = { permissionsState.launchMultiplePermissionRequest() },
+                                onRenameClick = { fileToRename = it }
+                            )
+                            AppScreen.GENRE_SELECTION -> Screen2_GenreSelection(viewModel = viewModel)
+                            AppScreen.GENERATING -> Screen3_Generating(viewModel = viewModel)
+                            AppScreen.PLAYBACK -> Screen4_Playback(
+                                viewModel = viewModel,
+                                onRenameClick = { fileToRename = it }
+                            )
+                        }
+                    }
+
+                    if (showMiniPlayer) {
+                        MiniPlayerBar(
+                            viewModel = viewModel,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
                 }
             }
 
@@ -1600,4 +1644,119 @@ private fun formatTime(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+}
+
+fun getColorsForGenre(genre: String): List<Color> {
+    return when (genre) {
+        "팝" -> listOf(Color(0xFFF39C12), Color(0xFFE74C3C), Color(0xFF9B59B6))
+        "재즈" -> listOf(Color(0xFF2C3E50), Color(0xFF16A085), Color(0xFF2980B9))
+        "클래식" -> listOf(Color(0xFF7E57C2), Color(0xFFB39DDB), Color(0xFFD1C4E9))
+        "록" -> listOf(Color(0xFFC0392B), Color(0xFF962D22), Color(0xFF2C3E50))
+        "R&B" -> listOf(Color(0xFF8E44AD), Color(0xFF3498DB), Color(0xFF2C3E50))
+        "힙합" -> listOf(Color(0xFF27AE60), Color(0xFF2980B9), Color(0xFF8E44AD))
+        "일렉트로닉" -> listOf(Color(0xFF00E5FF), Color(0xFF6200EE), Color(0xFFFF007F))
+        "발라드" -> listOf(Color(0xFFBDC3C7), Color(0xFF2C3E50), Color(0xFF7F8C8D))
+        else -> listOf(Color(0xFF00E5FF), Color(0xFF6200EE), Color(0xFFFF007F))
+    }
+}
+
+@Composable
+fun rememberAnimatedGradientBrush(colors: List<Color>): Brush {
+    val infiniteTransition = rememberInfiniteTransition(label = "genre_gradient")
+    val animatedOffset by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(8000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "gradient_offset"
+    )
+
+    return Brush.linearGradient(
+        colors = colors,
+        start = androidx.compose.ui.geometry.Offset(animatedOffset * 300f, (1f - animatedOffset) * 200f),
+        end = androidx.compose.ui.geometry.Offset(800f + (1f - animatedOffset) * 200f, 1500f + animatedOffset * 300f)
+    )
+}
+
+@Composable
+fun MiniPlayerBar(
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier
+) {
+    val file = viewModel.currentPlayingFile ?: return
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1E1C2A).copy(alpha = 0.95f)
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+            .clickable {
+                viewModel.currentScreen = AppScreen.PLAYBACK
+            }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MusicNote,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = file.name.substringBeforeLast("."),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "재생 중 • ${viewModel.selectedGenre}",
+                    color = Color.Gray,
+                    fontSize = 11.sp,
+                    maxLines = 1
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    if (viewModel.isPlaying) viewModel.pausePlayback() else viewModel.resumePlayback()
+                },
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color.White, CircleShape)
+            ) {
+                Icon(
+                    imageVector = if (viewModel.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (viewModel.isPlaying) "Pause" else "Play",
+                    tint = Color(0xFF6200EE),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
 }
