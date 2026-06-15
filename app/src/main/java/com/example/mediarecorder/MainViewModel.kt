@@ -36,6 +36,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.media.MediaMetadataRetriever
 
 enum class AppScreen {
     MAIN,
@@ -74,6 +75,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
     var latestConvertedFile by mutableStateOf<ConvertedFile?>(null)
 
     var selectedGenre by mutableStateOf("팝")
+
+    var includeWeatherInLyrics by mutableStateOf(true)
 
     var generatingStep by mutableStateOf(1)
         private set
@@ -246,7 +249,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
                     val base64Audio = fileToBase64DataUri(file)
                     val timeSlotKo = getCurrentTimeSlot()
                     val timeSlotEng = getCurrentTimeSlotEng()
-                    val prompt = "A $selectedGenre humming song created during $timeSlotEng ($timeSlotKo), $weatherStatus weather theme, matching atmosphere of $locationName. Make it high quality, catchy, matching melody."
+                    val weatherPart = if (includeWeatherInLyrics) "$weatherStatus weather theme, matching atmosphere of $locationName." else ""
+                    val prompt = "A $selectedGenre humming song created during $timeSlotEng ($timeSlotKo), $weatherPart Make it high quality, catchy, matching melody."
                     
                     val request = ReplicatePredictionRequest(
                         version = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
@@ -305,8 +309,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
                                             }
                                         }
                                         
-                                        val mood = getMockMood(weatherStatus, selectedGenre)
-                                        val lyrics = getMockLyrics(weatherStatus, selectedGenre)
+                                        val mood = getMockMood(includeWeatherInLyrics, weatherStatus, selectedGenre)
+                                        val lyrics = getMockLyrics(includeWeatherInLyrics, weatherStatus, selectedGenre, recording)
                                         
                                         val jsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
                                         val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
@@ -379,7 +383,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         var fileDownloaded = false
         try {
             val client = OkHttpClient()
-            val sampleUrl = "https://github.com/rafaelreis-hotmart/Audio-Sample-files/raw/master/sample.mp3"
+            val index = (recording.name.hashCode() + genre.hashCode()).let { kotlin.math.abs(it) % 16 + 1 }
+            val sampleUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-$index.mp3"
             val downloadRequest = Request.Builder().url(sampleUrl).build()
             client.newCall(downloadRequest).execute().use { downloadResponse ->
                 if (downloadResponse.isSuccessful && downloadResponse.body != null) {
@@ -413,8 +418,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         }
 
         val mockJsonFile = File(outputDir, "converted_${cleanName}_$timestamp.json")
-        val mood = getMockMood(weatherStatus, genre)
-        val lyrics = getMockLyrics(weatherStatus, genre)
+        val mood = getMockMood(includeWeatherInLyrics, weatherStatus, genre)
+        val lyrics = getMockLyrics(includeWeatherInLyrics, weatherStatus, genre, recording)
         val jsonMap = mapOf("mood" to mood, "lyrics" to lyrics)
         try {
             mockJsonFile.writeText(Gson().toJson(jsonMap))
@@ -539,91 +544,121 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         }
     }
 
-    private fun getMockMood(weather: String, genre: String): String {
+    private fun getMockMood(useWeather: Boolean, weather: String, genre: String): String {
         val timeSlot = getCurrentTimeSlot()
+        if (!useWeather) {
+            return "허밍의 리듬을 살려 연주되는 깊고 풍부한 $genre 분위기 ($timeSlot)"
+        }
         return when (weather) {
-            "Sunny" -> "맑은 햇살 아래 흐르는 밝고 활기찬 $genre 분위기 ($timeSlot)"
-            "Rainy" -> "창밖의 빗소리와 어우러지는 촉촉하고 감성적인 $genre 분위기 ($timeSlot)"
-            "Cloudy" -> "차분하고 포근한 구름 사이로 스며드는 나른한 $genre 분위기 ($timeSlot)"
-            "Snowy" -> "하얀 눈밭 위에 펼쳐지는 따뜻하고 평화로운 $genre 분위기 ($timeSlot)"
+            "Sunny" -> "맑음 아래 흐르는 밝고 활기찬 $genre 분위기 ($timeSlot)"
+            "Rainy" -> "빗소리와 어우러지는 촉촉하고 감성적인 $genre 분위기 ($timeSlot)"
+            "Cloudy" -> "차분하고 포근한 나른한 $genre 분위기 ($timeSlot)"
+            "Snowy" -> "눈밭 위에 펼쳐지는 따뜻하고 평화로운 $genre 분위기 ($timeSlot)"
             else -> "편안하고 어쿠스틱한 $genre 분위기 ($timeSlot)"
         }
     }
 
-    private fun getMockLyrics(weather: String, genre: String): String {
-        val lines1 = when (weather) {
-            "Sunny" -> listOf(
-                "눈부신 햇살이 가득한 오늘",
-                "푸른 하늘 아래 바람을 느끼며",
-                "노란 햇볕이 내 어깨를 비추는 날",
-                "반짝이는 거리를 가볍게 걸을 때",
-                "맑게 갠 날씨가 나를 미소 짓게 해"
-            )
-            "Rainy" -> listOf(
-                "창밖에 조용히 빗소리가 내리고",
-                "우산 아래 너와 나란히 서서",
-                "촉촉이 젖은 거리를 바라보며",
-                "흐린 유리창에 비친 내 모습",
-                "빗방울이 하나둘 떨어지는 오후"
-            )
-            "Cloudy" -> listOf(
-                "구름 가득한 하늘 아래 차분해지는 시간",
-                "안개 낀 아침 공기를 마시며",
-                "어두워진 하늘을 가만히 올려다봐",
-                "빛바랜 오후의 회색빛 분위기",
-                "흐릿한 세상이 오히려 포근해"
-            )
-            "Snowy" -> listOf(
-                "하얀 눈송이가 소복이 쌓이는 날",
-                "차가운 겨울바람이 뺨을 스칠 때",
-                "온 세상이 하얗게 변해버린 오늘",
-                "창밖으로 조용히 내리는 함박눈",
-                "하얀 김이 입가에 번지는 차가운 아침"
-            )
-            else -> listOf(
-                "조용히 흐르는 시간의 틈 사이로",
-                "바쁜 하루 끝에 찾아온 이 평화",
-                "조용한 방 안 가만히 앉아",
-                "어디선가 불어오는 미풍을 따라",
-                "혼자만의 생각에 잠기는 시간"
+    private fun getMockLyrics(useWeather: Boolean, weather: String, genre: String, recording: RecordingFile): String {
+        val durationMs = getAudioDurationMs(recording.path)
+        val durationSec = durationMs / 1000
+        val seed = recording.name.hashCode() + genre.hashCode() + (if (useWeather) weather.hashCode() else 17)
+        val random = java.util.Random(seed.toLong())
+
+        val timeSlot = getCurrentTimeSlot()
+        
+        val lines1 = if (useWeather) {
+            when (weather) {
+                "Sunny" -> listOf(
+                    "눈부신 햇살이 가득한 오늘",
+                    "푸른 하늘 아래 바람을 느끼며",
+                    "노란 햇볕이 내 어깨를 비추는 날",
+                    "반짝이는 거리를 가볍게 걸을 때",
+                    "맑게 갠 날씨가 나를 미소 짓게 해"
+                )
+                "Rainy" -> listOf(
+                    "창밖에 조용히 빗소리가 내리고",
+                    "우산 아래 너와 나란히 서서",
+                    "촉촉이 젖은 거리를 바라보며",
+                    "흐린 유리창에 비친 내 모습",
+                    "빗방울이 하나둘 떨어지는 오후"
+                )
+                "Cloudy" -> listOf(
+                    "구름 가득한 하늘 아래 차분해지는 시간",
+                    "안개 낀 아침 공기를 마시며",
+                    "어두워진 하늘을 가만히 올려다봐",
+                    "빛바랜 오후의 회색빛 분위기",
+                    "흐릿한 세상이 오히려 포근해"
+                )
+                "Snowy" -> listOf(
+                    "하얀 눈송이가 소복이 쌓이는 날",
+                    "차가운 겨울바람이 뺨을 스칠 때",
+                    "온 세상이 하얗게 변해버린 오늘",
+                    "창밖으로 조용히 내리는 함박눈",
+                    "하얀 김이 입가에 번지는 차가운 아침"
+                )
+                else -> listOf(
+                    "조용히 흐르는 시간의 틈 사이로",
+                    "바쁜 하루 끝에 찾아온 이 평화",
+                    "조용한 방 안 가만히 앉아",
+                    "어디선가 불어오는 미풍을 따라",
+                    "혼자만의 생각에 잠기는 시간"
+                )
+            }
+        } else {
+            listOf(
+                "귓가에 맴도는 부드러운 콧노래",
+                "작은 목소리로 시작된 멜로디",
+                "이 순간 흘러나오는 나만의 고백",
+                "조용히 쌓여가는 우리의 노래",
+                "마음속에서 피어난 부드러운 음율"
             )
         }
 
-        val lines2 = when (weather) {
-            "Sunny" -> listOf(
-                "너와 함께 걷는 이 길이 즐거워",
-                "마음속 깊이 쌓인 걱정은 날려버려",
-                "콧노래가 흥얼흥얼 흘러나와",
-                "작은 설렘이 내 맘에 가득 차올라",
-                "어디로든 떠나고 싶은 기분이야"
-            )
-            "Rainy" -> listOf(
-                "오래된 음악을 조용히 틀어봐",
-                "기억 속의 너를 가만히 떠올려",
-                "따뜻한 커피 향이 방을 채우고",
-                "지나간 추억들이 문득 그리워져",
-                "차분한 이 감정에 나를 맡겨둘래"
-            )
-            "Cloudy" -> listOf(
-                "서두르지 않고 한 걸음씩 걸어가",
-                "생각이 꼬리를 물고 이어지는 밤",
-                "마음의 소리에 귀를 기울여봐",
-                "나른한 오후의 여유를 즐기며",
-                "조금은 느려져도 괜찮을 것 같아"
-            )
-            "Snowy" -> listOf(
-                "시린 손을 주머니에 쏙 넣고서",
-                "어릴 적 타오르던 벽난로가 그리워",
-                "너와 함께 나누던 따뜻한 온기",
-                "소리 없이 다가온 하얀 겨울이야",
-                "작은 온기를 나누며 미소 짓네"
-            )
-            else -> listOf(
-                "소박한 일상 속 행복을 찾아봐",
-                "너에게 전하고 싶은 말이 있어",
-                "머릿속 복잡한 일은 다 잊은 채",
-                "나만의 쉼표 하나를 그려봐",
-                "마음이 흐르는 대로 따라가네"
+        val lines2 = if (useWeather) {
+            when (weather) {
+                "Sunny" -> listOf(
+                    "너와 함께 걷는 이 길이 즐거워",
+                    "마음속 깊이 쌓인 걱정은 날려버려",
+                    "콧노래가 흥얼흥얼 흘러나와",
+                    "작은 설렘이 내 맘에 가득 차올라",
+                    "어디로든 떠나고 싶은 기분이야"
+                )
+                "Rainy" -> listOf(
+                    "오래된 음악을 조용히 틀어봐",
+                    "기억 속의 너를 가만히 떠올려",
+                    "따뜻한 커피 향이 방을 채우고",
+                    "지나간 추억들이 문득 그리워져",
+                    "차분한 이 감정에 나를 맡겨둘래"
+                )
+                "Cloudy" -> listOf(
+                    "서두르지 않고 한 걸음씩 걸어가",
+                    "생각이 꼬리를 물고 이어지는 밤",
+                    "마음의 소리에 귀를 기울여봐",
+                    "나른한 오후의 여유를 즐기며",
+                    "조금은 느려져도 괜찮을 것 같아"
+                )
+                "Snowy" -> listOf(
+                    "시린 손을 주머니에 쏙 넣고서",
+                    "어릴 적 타오르던 벽난로가 그리워",
+                    "너와 함께 나누던 따뜻한 온기",
+                    "소리 없이 다가온 하얀 겨울이야",
+                    "작은 온기를 나누며 미소 짓네"
+                )
+                else -> listOf(
+                    "소박한 일상 속 행복을 찾아봐",
+                    "너에게 전하고 싶은 말이 있어",
+                    "머릿속 복잡한 일은 다 잊은 채",
+                    "나만의 쉼표 하나를 그려봐",
+                    "마음이 흐르는 대로 따라가네"
+                )
+            }
+        } else {
+            listOf(
+                "작은 흥얼거림이 큰 울림이 되어",
+                "마음이 닿는 곳으로 뻗어가네",
+                "서툴지만 진심 어린 나의 고백을",
+                "이 리듬에 실어 네게 보낼게",
+                "말하지 못한 내 비밀스러운 이야기들"
             )
         }
 
@@ -673,7 +708,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
             "마음속 깊이 간직할 추억이 하나 더 늘었어."
         )
 
-        val timeSlot = getCurrentTimeSlot()
         val timeLines = when (timeSlot) {
             "새벽" -> listOf(
                 "고요한 새벽길을 홀로 걸으며",
@@ -702,12 +736,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
             )
         }
 
+        val line1 = lines1[random.nextInt(lines1.size)]
+        val line2 = lines2[random.nextInt(lines2.size)]
+        val line3 = lines3[random.nextInt(lines3.size)]
+        val line4 = lines4[random.nextInt(lines4.size)]
+        val timeLine = timeLines[random.nextInt(timeLines.size)]
+
+        val humIntro = if (durationSec > 0) {
+            "(${durationSec}초 동안 흥얼거린 $genre 멜로디에 담긴 이야기)"
+        } else {
+            "(${genre} 멜로디에 담긴 이야기)"
+        }
+
         return """
+            $humIntro
             (Verse 1)
-            ${timeLines.random()}
-            ${lines2.random()}
-            ${lines3.random()}
-            ${lines4.random()}
+            $timeLine
+            $line1
+            $line2
+            $line3
+            $line4
         """.trimIndent()
     }
 
@@ -1002,6 +1050,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application), S
         val units = arrayOf("B", "KB", "MB")
         val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
         return String.format(Locale.getDefault(), "%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+    }
+
+    fun getAudioDurationMs(path: String): Long {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(path)
+            val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            time?.toLong() ?: 0L
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    fun getAudioDurationString(path: String): String {
+        val ms = getAudioDurationMs(path)
+        val totalSeconds = ms / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
 }
 

@@ -493,49 +493,111 @@ fun Screen2_GenreSelection(viewModel: MainViewModel) {
                 .fillMaxWidth()
                 .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
                     modifier = Modifier
-                        .size(40.dp)
-                        .background(Color(0xFFD0BCFF).copy(alpha = 0.15f), CircleShape)
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Mic,
-                        contentDescription = null,
-                        tint = Color(0xFFD0BCFF),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "녹음 완료",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    val weatherKo = when (viewModel.weatherStatus) {
-                        "Sunny" -> "맑음"
-                        "Rainy" -> "비"
-                        "Cloudy" -> "흐림"
-                        "Snowy" -> "눈"
-                        else -> "분석 완료"
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(Color(0xFFD0BCFF).copy(alpha = 0.15f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = null,
+                            tint = Color(0xFFD0BCFF),
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
-                    Text(
-                        text = "0:08 | $weatherKo 날씨",
-                        color = Color.Gray,
-                        fontSize = 12.sp
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "녹음 완료",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        val weatherKo = when (viewModel.weatherStatus) {
+                            "Sunny" -> "맑음"
+                            "Rainy" -> "비"
+                            "Cloudy" -> "흐림"
+                            "Snowy" -> "눈"
+                            else -> "분석 완료"
+                        }
+                        val durationStr = viewModel.latestRecordedFile?.let { viewModel.getAudioDurationString(it.path) } ?: "00:00"
+                        Text(
+                            text = "$durationStr | $weatherKo 날씨",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.08f),
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.includeWeatherInLyrics = !viewModel.includeWeatherInLyrics }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cloud,
+                            contentDescription = null,
+                            tint = if (viewModel.includeWeatherInLyrics) Color(0xFF00E5FF) else Color.Gray,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "날씨 정보 반영하여 가사 추천",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            val weatherKo = when (viewModel.weatherStatus) {
+                                "Sunny" -> "맑음"
+                                "Rainy" -> "비"
+                                "Cloudy" -> "흐림"
+                                "Snowy" -> "눈"
+                                else -> "분석 완료"
+                            }
+                            Text(
+                                text = if (viewModel.includeWeatherInLyrics) "현재 날씨($weatherKo)가 가사에 반영됩니다" else "날씨 정보 없이 가사를 추천합니다",
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = viewModel.includeWeatherInLyrics,
+                        onCheckedChange = { viewModel.includeWeatherInLyrics = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF00E5FF),
+                            checkedTrackColor = Color(0xFF00E5FF).copy(alpha = 0.3f),
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                        )
                     )
                 }
             }
         }
+
 
         Spacer(modifier = Modifier.height(16.dp))
 
